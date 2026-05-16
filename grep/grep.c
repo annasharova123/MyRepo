@@ -1,29 +1,17 @@
-#include <regex.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/stat.h>
-#include <unistd.h>
+#include "grep.h"
 
-typedef struct {
-  int e;
-  char *pattern;
-  int i;
-  int v;
-  int c;
-  int l;
-  int n;
-  int h;
-  int s;
-  int f;
-  int o;
-} Options;
-int is_dir(const char *filename);
-int process_regex(regex_t *reg_exp, const char *string);
-int compile_regex(regex_t *reg_exp, const char *pattern, int flag);
-void delete_memory(Options *options);
-char *add_pattern(char *pattern, char *argv[]);
-void process_pattern_file(char *pattern, char **old_pattern);
+int main(int argc, char *argv[]) {
+  if (argc > 1) {
+    Options options = {0, NULL, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+
+    if (parser(argc, argv, &options) == 1) {
+      return 1;
+    };
+  } else {
+    printf("No pattern or file");
+    return 1;
+  }
+}
 
 int compile_regex(regex_t *reg_exp, const char *pattern, int flag) {
   if (regcomp(reg_exp, pattern, flag)) {
@@ -63,7 +51,7 @@ int enable_f(const char *pattern_file, Options *options) {
 
   return 0;
 }
-void process_pattern_file(char *pattern, char **old_pattern) {
+void process_pattern_file(const char *pattern, char **old_pattern) {
   if (*old_pattern != NULL) {
     *old_pattern =
         realloc(*old_pattern, strlen(*old_pattern) + 1 + strlen(pattern) + 1);
@@ -76,7 +64,6 @@ void process_pattern_file(char *pattern, char **old_pattern) {
 }
 
 int read_file(int argc, char *argv[], Options *options) {
-  FILE *f = NULL;
   regex_t reg_exp;
   int regex_flags = REG_EXTENDED;
   if (options->i == 1) {
@@ -86,8 +73,8 @@ int read_file(int argc, char *argv[], Options *options) {
     return 0;
   }
 
-  int exit_status = 0;
   for (int i = optind; i < argc; ++i) {
+    FILE *f = NULL;
     f = fopen(argv[i], "r");
     if (f == NULL) {
       if (options->s == 0) {
@@ -103,7 +90,7 @@ int read_file(int argc, char *argv[], Options *options) {
     }
     int file_number = argc - optind;
     int print_file_name = 1;
-    if (file_number == 1 | options->h == 1) {
+    if (file_number == 1 || options->h == 1) {
       print_file_name = 0;
     }
     char *line = NULL;
@@ -112,9 +99,10 @@ int read_file(int argc, char *argv[], Options *options) {
     int count_line = 0;
     int org_line_number = 0;
     int new_line = 1;
+
     while ((check = getline(&line, &len_str, f)) != -1) {
       ++org_line_number;
-      if (options->c == 0 && options->l == 0) {
+      if (options->c == 0 && options->l == 0 && options->o == 0) {
         int result = process_regex(&reg_exp, line);
         if (result == 1 && options->v == 0) {
           if (print_file_name) {
@@ -153,6 +141,10 @@ int read_file(int argc, char *argv[], Options *options) {
 
         printf("%s\n", argv[i]);
         break;
+
+      } else if (options->o == 1 && options->v == 0) {
+        proccess_option_o(options, &reg_exp, line, org_line_number, argv[i],
+                          print_file_name);
       }
     }
     if (options->c == 1 && options->l == 0) {
@@ -174,7 +166,6 @@ int read_file(int argc, char *argv[], Options *options) {
 }
 
 int process_regex(regex_t *reg_exp, const char *string) {
-  regmatch_t match[1];
   int result = regexec(reg_exp, string, 0, NULL, 0);
   if (!result) {
     return 1;
@@ -185,8 +176,29 @@ int process_regex(regex_t *reg_exp, const char *string) {
     return -1;
   }
 }
+
+void proccess_option_o(const Options *options, regex_t *reg_exp,
+                       const char *string, int org_line_number,
+                       const char *filename, int print_file_name) {
+  regmatch_t match[1];
+  const char *cur = string;
+  int result;
+  while ((result = regexec(reg_exp, cur, 1, match, 0)) == 0) {
+    if (print_file_name) {
+      printf("%s:", filename);
+    }
+    if (options->n == 1) {
+      printf("%d:", org_line_number);
+    }
+    if (match[0].rm_so != -1) {
+      printf("%.*s\n", (int)(match[0].rm_eo - match[0].rm_so),
+             cur + match[0].rm_so);
+    }
+    cur += match[0].rm_eo;
+  }
+}
 char *add_pattern(char *pattern, char *argv[]) {
-  char *src = (optarg != NULL) ? optarg : argv[optind];
+  const char *src = (optarg != NULL) ? optarg : argv[optind];
   if (src == NULL)
     return pattern;
   if (pattern != NULL) {
@@ -200,12 +212,14 @@ char *add_pattern(char *pattern, char *argv[]) {
   return pattern;
 }
 
-int parser(int argc, char *argv[],
-           Options *options) { // grep -e "pattern 1" -e "pattern 2" file.txt
+int parser(int argc, char *argv[], Options *options) {
   int opt;
-  while ((opt = getopt(argc, argv, "e:ivclonhsf:")) !=
-         -1) { // grep -i "pattern2" file.txt
+  while ((opt = getopt(argc, argv, "e:ivclnhsf:o")) != -1) {
     switch (opt) {
+
+    case 'o':
+      options->o = 1;
+      break;
     case 'e':
       options->e = 1;
       char *pattern = add_pattern(options->pattern, argv);
@@ -225,9 +239,6 @@ int parser(int argc, char *argv[],
       break;
     case 'v':
       options->v = 1;
-      break;
-    case 'o':
-      options->o = 1;
       break;
     case 's':
       options->s = 1;
@@ -263,17 +274,4 @@ int parser(int argc, char *argv[],
     return 1;
   }
   return 0;
-}
-
-int main(int argc, char *argv[]) {
-  if (argc > 1) {
-    Options options = {0, NULL, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-
-    if (parser(argc, argv, &options) == 1) {
-      return 1;
-    };
-  } else {
-    printf("No pattern or file");
-    return 1;
-  }
 }
