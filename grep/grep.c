@@ -1,19 +1,21 @@
 #include "grep.h"
 
-int main(int argc, char *argv[]) {
+int main(int argc, char* argv[]) {
+  int exit_code = 0;
   if (argc > 1) {
     Options options = {0, NULL, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
     if (parser(argc, argv, &options) == 1) {
-      return 1;
+      exit_code = 1;
     };
   } else {
     printf("No pattern or file");
-    return 1;
+    exit_code = 1;
   }
+  return exit_code;
 }
 
-int compile_regex(regex_t *reg_exp, const char *pattern, int flag) {
+int compile_regex(regex_t* reg_exp, const char* pattern, int flag) {
   if (regcomp(reg_exp, pattern, flag)) {
     printf("Unable to compile regular expression");
     return 1;
@@ -21,27 +23,32 @@ int compile_regex(regex_t *reg_exp, const char *pattern, int flag) {
   return 0;
 }
 
-int is_dir(const char *filename) {
-  struct stat file_stat;
-  stat(filename, &file_stat);
-  return S_ISDIR(file_stat.st_mode);
+int is_dir(const char* filename) {
+  struct stat file_stat = {0};
+  if (stat(filename, &file_stat) != -1) {
+    return S_ISDIR(file_stat.st_mode);
+  }
+  return -1;
 }
-void delete_memory(Options *options) { free(options->pattern); }
+void delete_memory(Options* options) { free(options->pattern); }
 
-int enable_f(const char *pattern_file, Options *options) {
-  FILE *f = NULL;
+int enable_f(const char* pattern_file, Options* options) {
+  FILE* f = NULL;
   f = fopen(pattern_file, "r");
   if (f == NULL) {
+    if (options->s == 0) {
+      fprintf(stderr, "grep: %s: No such file or directory\n", pattern_file);
+    }
     return 1;
   }
   ssize_t read;
   size_t len = 0;
-  char *line = NULL;
+  char* line = NULL;
   while ((read = getline(&line, &len, f)) != -1) {
     if (read > 0 && line[read - 1] == '\n') {
       line[read - 1] = '\0';
     }
-    char *pattern_copy = strdup(line);
+    char* pattern_copy = strdup(line);
     process_pattern_file(pattern_copy, &(options->pattern));
     free(pattern_copy);
   }
@@ -51,137 +58,165 @@ int enable_f(const char *pattern_file, Options *options) {
 
   return 0;
 }
-void process_pattern_file(const char *pattern, char **old_pattern) {
+void process_pattern_file(const char* pattern, char** old_pattern) {
   if (*old_pattern != NULL) {
-    *old_pattern =
+    char* tmp_pattern =
         realloc(*old_pattern, strlen(*old_pattern) + 1 + strlen(pattern) + 1);
+    if (tmp_pattern == NULL) {
+      return;
+    }
+    *old_pattern = tmp_pattern;
     strcat(*old_pattern, "|");
     strcat(*old_pattern, pattern);
   } else {
-    *old_pattern = realloc(*old_pattern, strlen(pattern) + 1);
+    char* tmp_pattern = realloc(NULL, strlen(pattern) + 1);
+    if (tmp_pattern == NULL) {
+      return;
+    }
+    *old_pattern = tmp_pattern;
     strcpy(*old_pattern, pattern);
   }
 }
 
-int read_file(int argc, char *argv[], Options *options) {
+int read_file(int argc, char* argv[], Options* options) {
+  if (options->pattern == NULL) {
+    return 1;
+  }
+  int exit_code = 0;
   regex_t reg_exp;
   int regex_flags = REG_EXTENDED;
+  int error_check = 1;
+  int regex_compiled = 1;
   if (options->i == 1) {
     regex_flags |= REG_ICASE;
   }
   if (compile_regex(&reg_exp, options->pattern, regex_flags) == 1) {
-    return 0;
+    regex_compiled = 0;
+    free(options->pattern);
+    return 1;
   }
 
   for (int i = optind; i < argc; ++i) {
-    FILE *f = NULL;
-    f = fopen(argv[i], "r");
-    if (f == NULL) {
+    FILE* f = NULL;
+    int is_dir_v = is_dir(argv[i]);
+    if (is_dir_v != 0 && is_dir_v != -1) {
       if (options->s == 0) {
-        fprintf(stderr, "s21_grep: %s: No such file or directory\n", argv[i]);
+        fflush(stdout);
+        fprintf(stderr, "grep: %s: Is a directory\n", argv[i]);
       }
-      continue;
+      error_check = 0;
     }
-    if (is_dir(argv[i]) == 1) {
-      if (options->s == 0) {
-        fprintf(stderr, "s21_grep: %s: Is a directory\n", argv[i]);
+    if (error_check != 0) {
+      f = fopen(argv[i], "r");
+      if (f == NULL) {
+        if (options->s == 0) {
+          fflush(stdout);
+          fprintf(stderr, "grep: %s: No such file or directory\n", argv[i]);
+        }
+        error_check = 0;
       }
-      continue;
     }
-    int file_number = argc - optind;
-    int print_file_name = 1;
-    if (file_number == 1 || options->h == 1) {
-      print_file_name = 0;
-    }
-    char *line = NULL;
-    size_t len_str = 0;
-    int check;
-    int count_line = 0;
-    int org_line_number = 0;
-    int new_line = 1;
+    if (error_check != 0) {
+      int file_number = argc - optind;
+      int print_file_name = 1;
+      if (file_number == 1 || options->h == 1) {
+        print_file_name = 0;
+      }
+      char* line = NULL;
+      size_t len_str = 0;
+      int check;
+      int count_line = 0;
+      int org_line_number = 0;
+      int new_line = 1;
 
-    while ((check = getline(&line, &len_str, f)) != -1) {
-      ++org_line_number;
-      if (options->c == 0 && options->l == 0 && options->o == 0) {
-        int result = process_regex(&reg_exp, line);
-        if (result == 1 && options->v == 0) {
-          if (print_file_name) {
-            printf("%s:", argv[i]);
+      while ((check = getline(&line, &len_str, f)) != -1) {
+        ++org_line_number;
+        if (options->c == 0 && options->l == 0 && options->o == 0) {
+          int result = process_regex(&reg_exp, line);
+          if (result == 1 && options->v == 0) {
+            if (print_file_name) {
+              printf("%s:", argv[i]);
+            }
+            (options->n == 1) ? printf("%d:%s", org_line_number, line)
+                              : printf("%s", line);
+            new_line = (line[check - 1] == '\n');
+          } else if (result == 0 && options->v == 1) {
+            if (print_file_name) {
+              printf("%s:", argv[i]);
+            }
+            (options->n == 1) ? printf("%d:%s", org_line_number, line)
+                              : printf("%s", line);
+            new_line = (line[check - 1] == '\n');
+          } else if (result == -1) {
+            exit_code = 1;
           }
-          (options->n == 1) ? printf("%d:%s", org_line_number, line)
-                            : printf("%s", line);
-          new_line = (line[check - 1] == '\n');
-        } else if (result == 0 && options->v == 1) {
-          if (print_file_name) {
-            printf("%s:", argv[i]);
+        } else if (options->c == 1 && options->l == 0) {
+          int result = process_regex(&reg_exp, line);
+          if (result == 1 && options->v == 0) {
+            ++count_line;
+          } else if (result == 0 && options->v == 1) {
+            ++count_line;
           }
-          (options->n == 1) ? printf("%d:%s", org_line_number, line)
-                            : printf("%s", line);
-          new_line = (line[check - 1] == '\n');
-        } else if (result == -1) {
-          return 1;
-        }
-      } else if (options->c == 1 && options->l == 0) {
-        int result = process_regex(&reg_exp, line);
-        if (result == 1 && options->v == 0) {
-          ++count_line;
-        } else if (result == 0 && options->v == 1) {
-          ++count_line;
-        }
-      } else if (options->c == 1 && options->l == 1) {
-        if (file_number == 1) {
-          printf("%d\n", 1);
-          printf("%s\n", argv[i]);
-        } else {
-          printf("%s:%d\n", argv[i], 1);
-          printf("%s\n", argv[i]);
-        }
-        break;
-      } else if (options->l == 1) {
+        } else if (options->c == 1 && options->l == 1) {
+          int result = process_regex(&reg_exp, line);
+          if ((result == 1 && options->v == 0) ||
+              (result == 0 && options->v == 1)) {
+            printf("%s\n", argv[i]);
+            break;
+          }
+        } else if (options->l == 1) {
+          int result = process_regex(&reg_exp, line);
+          if ((result == 1 && options->v == 0) ||
+              (result == 0 && options->v == 1)) {
+            printf("%s\n", argv[i]);
+            break;
+          }
 
-        printf("%s\n", argv[i]);
-        break;
-
-      } else if (options->o == 1 && options->v == 0) {
-        proccess_option_o(options, &reg_exp, line, org_line_number, argv[i],
-                          print_file_name);
+        } else if (options->o == 1 && options->v == 0) {
+          proccess_option_o(options, &reg_exp, line, org_line_number, argv[i],
+                            print_file_name);
+        }
       }
-    }
-    if (options->c == 1 && options->l == 0) {
-      if (print_file_name) {
-        printf("%s:", argv[i]);
+      if (options->c == 1 && options->l == 0) {
+        if (print_file_name) {
+          printf("%s:", argv[i]);
+        }
+        printf("%d\n", count_line);
       }
-      printf("%d\n", count_line);
+      if (new_line == 0 && options->c == 0 && options->l == 0) {
+        printf("\n");
+      }
+      free(line);
+      fclose(f);
     }
-    if (new_line == 0 && options->c == 0 && options->l == 0) {
-      printf("\n");
-    }
-    fclose(f);
-    free(line);
+    error_check = 1;
   }
   delete_memory(options);
-  regfree(&reg_exp);
-
-  return 0;
-}
-
-int process_regex(regex_t *reg_exp, const char *string) {
-  int result = regexec(reg_exp, string, 0, NULL, 0);
-  if (!result) {
-    return 1;
-  } // found
-  else if (result == REG_NOMATCH) {
-    return 0;
-  } else {
-    return -1;
+  if (regex_compiled == 1) {
+    regfree(&reg_exp);
   }
+  return exit_code;
 }
 
-void proccess_option_o(const Options *options, regex_t *reg_exp,
-                       const char *string, int org_line_number,
-                       const char *filename, int print_file_name) {
+int process_regex(regex_t* reg_exp, const char* string) {
+  int result = regexec(reg_exp, string, 0, NULL, 0);
+  int exit_code;
+  if (!result) {
+    exit_code = 1;
+  }  // found
+  else if (result == REG_NOMATCH) {
+    exit_code = 0;
+  } else {
+    exit_code = -1;
+  }
+  return exit_code;
+}
+
+void proccess_option_o(const Options* options, regex_t* reg_exp,
+                       const char* string, int org_line_number,
+                       const char* filename, int print_file_name) {
   regmatch_t match[1];
-  const char *cur = string;
+  const char* cur = string;
   int result;
   while ((result = regexec(reg_exp, cur, 1, match, 0)) == 0) {
     if (print_file_name) {
@@ -197,72 +232,32 @@ void proccess_option_o(const Options *options, regex_t *reg_exp,
     cur += match[0].rm_eo;
   }
 }
-char *add_pattern(char *pattern, char *argv[]) {
-  const char *src = (optarg != NULL) ? optarg : argv[optind];
-  if (src == NULL)
-    return pattern;
+char* add_pattern(char* pattern, char* argv[]) {
+  const char* src = (optarg != NULL) ? optarg : argv[optind];
+  if (src == NULL) return pattern;
   if (pattern != NULL) {
-    pattern = realloc(pattern, strlen(pattern) + 1 + strlen(src) + 1);
+    char* tmp_pattern = realloc(pattern, strlen(pattern) + 1 + strlen(src) + 1);
+    if (tmp_pattern == NULL) {
+      return NULL;
+    }
+    pattern = tmp_pattern;
     strcat(pattern, "|");
     strcat(pattern, src);
   } else {
-    pattern = realloc(pattern, strlen(src) + 1);
+    char* tmp_pattern = realloc(pattern, strlen(src) + 1);
+    if (tmp_pattern == NULL) {
+      return NULL;
+    }
+    pattern = tmp_pattern;
     strcpy(pattern, src);
   }
   return pattern;
 }
 
-int parser(int argc, char *argv[], Options *options) {
-  int opt;
-  while ((opt = getopt(argc, argv, "e:ivclnhsf:o")) != -1) {
-    switch (opt) {
-
-    case 'o':
-      options->o = 1;
-      break;
-    case 'e':
-      options->e = 1;
-      char *pattern = add_pattern(options->pattern, argv);
-      if (pattern == NULL) {
-        return 1;
-      }
-      options->pattern = pattern;
-      break;
-    case 'i':
-      options->i = 1;
-      break;
-    case 'f':
-      options->f = 1;
-      if (enable_f(optarg, options) == 1) {
-        return 1;
-      }
-      break;
-    case 'v':
-      options->v = 1;
-      break;
-    case 's':
-      options->s = 1;
-      break;
-    case 'c':
-      options->c = 1;
-      break;
-    case 'l':
-      options->l = 1;
-      break;
-    case 'n':
-      options->n = 1;
-      break;
-    case 'h':
-      options->h = 1;
-      break;
-    case '?':
-      printf("Unknnown option");
-      return 1;
-    }
-  }
+int activating_no_flag(Options* options, char* argv[]) {
   if (options->e == 0) {
     if (options->f == 0) {
-      char *pattern = add_pattern(options->pattern, argv);
+      char* pattern = add_pattern(options->pattern, argv);
       if (pattern == NULL) {
         return 1;
       }
@@ -270,8 +265,73 @@ int parser(int argc, char *argv[], Options *options) {
       ++optind;
     }
   }
-  if (read_file(argc, argv, options) != 0) {
-    return 1;
-  }
   return 0;
+}
+int parser(int argc, char* argv[], Options* options) {
+  int exit_code = 0;
+  int opt;
+  while ((opt = getopt(argc, argv, "e:ivclnhsf:o")) != -1) {
+    switch (opt) {
+      case 'o':
+        options->o = 1;
+        break;
+      case 'e':
+        options->e = 1;
+        char* pattern = add_pattern(options->pattern, argv);
+        if (pattern == NULL) {
+          free(options->pattern);
+          return 1;
+        }
+        options->pattern = pattern;
+        break;
+      case 'i':
+        options->i = 1;
+        break;
+      case 'f':
+        options->f = 1;
+        if (enable_f(optarg, options) == 1) {
+          free(options->pattern);
+          return 1;
+        }
+        break;
+      case 'v':
+        options->v = 1;
+        break;
+      case 's':
+        options->s = 1;
+        break;
+      case 'c':
+        options->c = 1;
+        break;
+      case 'l':
+        options->l = 1;
+        break;
+      case 'n':
+        options->n = 1;
+        break;
+      case 'h':
+        options->h = 1;
+        break;
+      case '?':
+        printf("Unknown option");
+        free(options->pattern);
+        return 1;
+    }
+  }
+  if (options->e == 0) {
+    if (options->f == 0) {
+      char* pattern = add_pattern(options->pattern, argv);
+      if (pattern == NULL) {
+        free(options->pattern);
+        return 1;
+      }
+      options->pattern = pattern;
+      ++optind;
+    }
+  }
+
+  if (read_file(argc, argv, options) != 0) {
+    exit_code = 1;
+  }
+  return exit_code;
 }
